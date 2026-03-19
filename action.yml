@@ -1,0 +1,19 @@
+name: "SecureOps Scan"
+description: "Run SecureOps security scan"
+
+inputs:
+  url:
+    required: true
+  api_key:
+    required: true
+  fail_on_score_below:
+    required: false
+    default: "0"
+
+outputs:
+  score:
+    description: "Security score"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"
