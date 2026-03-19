@@ -1,7 +1,7 @@
 import * as core from "@actions/core";
 import axios from "axios";
 
-const API_URL = "https://api.secureops.io";
+const API_URL = "https://api.secureops.fr";
 
 async function run() {
   try {

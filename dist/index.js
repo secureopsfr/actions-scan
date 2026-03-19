@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const core = require("@actions/core");
 const axios_1 = require("axios");
-const API_URL = "https://api.secureops.io";
+const API_URL = "https://api.secureops.fr";
 async function run() {
     try {
         // Inputs GitHub Action
