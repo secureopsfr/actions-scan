@@ -14,7 +14,7 @@ async function run() {
 
     // Appel API SecureOps
     const response = await axios.post(
-      `${API_URL}/scan/api/scan`,
+      `${API_URL}/scan/api/scan/async`,
       { url },
       {
         headers: {
