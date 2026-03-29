@@ -36773,6 +36773,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __nccwpck_require__(7484);
 const axios_1 = __nccwpck_require__(7269);
 const API_URL = "https://api.secureops.fr";
+const RESULTS_LANG = "en";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function normalizeBaseUrl(input) {
     return input.replace(/\/+$/, "");
@@ -36873,7 +36874,7 @@ async function run() {
         const createResponse = await axios_1.default.post(`${baseUrl}/scan/api/scan/async`, {
             url,
             scan_type: "frontend",
-            input: {},
+            input: { lang: RESULTS_LANG },
         }, {
             headers,
             timeout: 30000,
