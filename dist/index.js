@@ -36781,7 +36781,7 @@ async function run() {
         const threshold = parseFloat(core.getInput("fail_on_score_below") || "0");
         core.info(`Starting SecureOps scan for: ${url}`);
         // Appel API SecureOps
-        const response = await axios_1.default.post(`${API_URL}/scan/api/scan`, { url }, {
+        const response = await axios_1.default.post(`${API_URL}/scan/api/scan/async`, { url }, {
             headers: {
                 "X-API-Key": apiKey,
                 "Content-Type": "application/json"
