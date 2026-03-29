@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 import axios, { AxiosError } from "axios";
 
 const API_URL = "https://api.secureops.fr";
+const RESULTS_LANG = "en";
 
 type CreateJobResponse = {
   job_id?: string;
@@ -146,7 +147,7 @@ async function run(): Promise<void> {
       {
         url,
         scan_type: "frontend",
-        input: {},
+        input: { lang: RESULTS_LANG },
       },
       {
         headers,
