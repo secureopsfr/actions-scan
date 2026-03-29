@@ -36773,34 +36773,105 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __nccwpck_require__(7484);
 const axios_1 = __nccwpck_require__(7269);
 const API_URL = "https://api.secureops.fr";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function normalizeBaseUrl(input) {
+    return input.replace(/\/+$/, "");
+}
+function parseNumberInput(name, fallback) {
+    const raw = core.getInput(name);
+    if (!raw)
+        return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) {
+        throw new Error(`Invalid input "${name}": "${raw}" is not a number`);
+    }
+    return n;
+}
+function getErrorMessage(err) {
+    if (axios_1.default.isAxiosError(err)) {
+        const aerr = err;
+        if (aerr.response) {
+            return `API error: ${aerr.response.status} - ${JSON.stringify(aerr.response.data)}`;
+        }
+        if (aerr.request) {
+            return "No response from SecureOps API";
+        }
+    }
+    if (err instanceof Error)
+        return err.message;
+    return "Unknown error";
+}
 async function run() {
     try {
-        // Inputs GitHub Action
         const url = core.getInput("url", { required: true });
         const apiKey = core.getInput("api_key", { required: true });
-        const threshold = parseFloat(core.getInput("fail_on_score_below") || "0");
+        const threshold = parseNumberInput("fail_on_score_below", 0);
+        const baseUrl = normalizeBaseUrl(API_URL);
+        const pollIntervalSeconds = parseNumberInput("poll_interval_seconds", 2);
+        const maxWaitSeconds = parseNumberInput("max_wait_seconds", 180);
+        const pollIntervalMs = Math.max(1, Math.floor(pollIntervalSeconds * 1000));
+        const maxWaitMs = Math.max(1, Math.floor(maxWaitSeconds * 1000));
         core.info(`Starting SecureOps scan for: ${url}`);
-        // Appel API SecureOps
-        const response = await axios_1.default.post(`${API_URL}/scan/api/scan/async`, { url }, {
-            headers: {
-                "X-API-Key": apiKey,
-                "Content-Type": "application/json"
-            },
-            timeout: 30000
+        const headers = {
+            "X-API-Key": apiKey,
+            "Content-Type": "application/json",
+        };
+        const createResponse = await axios_1.default.post(`${baseUrl}/scan/api/scan/async`, {
+            url,
+            scan_type: "frontend",
+            input: {},
+        }, {
+            headers,
+            timeout: 30000,
         });
-        const data = response.data;
-        const score = data.score;
-        const findings = data.findings || [];
-        core.setOutput("score", score);
+        const jobId = createResponse.data?.job_id;
+        if (!jobId) {
+            throw new Error(`Invalid API response: missing job_id. Payload: ${JSON.stringify(createResponse.data)}`);
+        }
+        core.info(`Job created: ${jobId}`);
+        const startedAt = Date.now();
+        let lastStatus = createResponse.data?.status || "pending";
+        while (Date.now() - startedAt < maxWaitMs) {
+            await sleep(pollIntervalMs);
+            const statusResponse = await axios_1.default.get(`${baseUrl}/scan/api/scan/async/${jobId}`, {
+                headers,
+                timeout: 30000,
+            });
+            lastStatus = statusResponse.data?.status || "unknown";
+            core.info(`Job status: ${lastStatus}`);
+            if (lastStatus === "failed") {
+                const err = statusResponse.data?.error;
+                const message = typeof err === "string" ? err : err?.message || "Scan failed";
+                throw new Error(`Scan failed: ${message}`);
+            }
+            if (lastStatus === "completed") {
+                break;
+            }
+        }
+        if (lastStatus !== "completed") {
+            throw new Error(`Scan timeout after ${maxWaitSeconds}s`);
+        }
+        const resultResponse = await axios_1.default.get(`${baseUrl}/scan/api/scan/async/${jobId}/result`, {
+            headers,
+            timeout: 30000,
+        });
+        const rawData = resultResponse.data;
+        const result = rawData && typeof rawData === "object" && "result" in rawData
+            ? rawData.result || {}
+            : rawData;
+        const score = Number(result.score);
+        if (!Number.isFinite(score)) {
+            throw new Error(`Invalid API response: score missing or invalid. Payload: ${JSON.stringify(resultResponse.data)}`);
+        }
+        const findings = Array.isArray(result.findings) ? result.findings : [];
+        const criticalFindings = findings.filter((f) => String(f?.severity || "").toLowerCase() === "critical");
+        core.setOutput("score", String(score));
         core.info(`Score: ${score}`);
         core.info(`Findings count: ${findings.length}`);
-        // Détection vulnérabilités critiques
-        const criticalFindings = findings.filter((f) => f.severity === "critical");
         if (criticalFindings.length > 0) {
             core.setFailed(`Critical vulnerabilities found: ${criticalFindings.length}`);
             return;
         }
-        // Vérification score minimum
         if (score < threshold) {
             core.setFailed(`Score ${score} is below threshold ${threshold}`);
             return;
@@ -36808,15 +36879,7 @@ async function run() {
         core.info("SecureOps scan passed successfully");
     }
     catch (error) {
-        if (error.response) {
-            core.setFailed(`API error: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-        }
-        else if (error.request) {
-            core.setFailed("No response from SecureOps API");
-        }
-        else {
-            core.setFailed(error.message);
-        }
+        core.setFailed(getErrorMessage(error));
     }
 }
 run();
