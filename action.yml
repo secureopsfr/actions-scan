@@ -3,12 +3,27 @@ description: "Run SecureOps security scan"
 
 inputs:
   url:
+    description: "Target URL to scan"
     required: true
+
   api_key:
+    description: "SecureOps API key"
     required: true
+
   fail_on_score_below:
+    description: "Fail if score is below this value"
     required: false
     default: "0"
+
+  poll_interval_seconds:
+    description: "Polling interval for async job status"
+    required: false
+    default: "2"
+
+  max_wait_seconds:
+    description: "Maximum wait time for async scan completion"
+    required: false
+    default: "180"
 
 outputs:
   score:
