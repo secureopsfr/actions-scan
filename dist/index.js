@@ -36801,6 +36801,60 @@ function getErrorMessage(err) {
         return err.message;
     return "Unknown error";
 }
+function summarizeFindingsBySeverity(findings) {
+    const summary = {
+        critical: 0,
+        high: 0,
+        medium: 0,
+        low: 0,
+        info: 0,
+        unknown: 0,
+    };
+    for (const finding of findings || []) {
+        const sev = String(finding?.severity || "").toLowerCase();
+        if (sev in summary) {
+            summary[sev] += 1;
+        }
+        else {
+            summary.unknown += 1;
+        }
+    }
+    return summary;
+}
+function logTopFindings(findings, maxItems = 10) {
+    if (!findings || findings.length === 0) {
+        core.info("No findings returned by API.");
+        return;
+    }
+    const severityOrder = {
+        critical: 0,
+        high: 1,
+        medium: 2,
+        low: 3,
+        info: 4,
+    };
+    const sorted = [...findings].sort((a, b) => {
+        const sa = String(a?.severity || "unknown").toLowerCase();
+        const sb = String(b?.severity || "unknown").toLowerCase();
+        const oa = sa in severityOrder ? severityOrder[sa] : 5;
+        const ob = sb in severityOrder ? severityOrder[sb] : 5;
+        return oa - ob;
+    });
+    const top = sorted.slice(0, maxItems);
+    core.info(`Top findings (${top.length}/${findings.length}):`);
+    top.forEach((f, idx) => {
+        const sev = String(f?.severity || "unknown").toUpperCase();
+        const title = String(f?.title || f?.evidence || "Untitled finding");
+        const target = String(f?.endpoint || f?.path || "n/a");
+        const line = `${idx + 1}. [${sev}] ${title} (target: ${target})`;
+        if (sev === "CRITICAL" || sev === "HIGH") {
+            core.error(line);
+        }
+        else {
+            core.warning(line);
+        }
+    });
+}
 async function run() {
     try {
         const url = core.getInput("url", { required: true });
@@ -36865,9 +36919,12 @@ async function run() {
         }
         const findings = Array.isArray(result.findings) ? result.findings : [];
         const criticalFindings = findings.filter((f) => String(f?.severity || "").toLowerCase() === "critical");
+        const severitySummary = summarizeFindingsBySeverity(findings);
         core.setOutput("score", String(score));
         core.info(`Score: ${score}`);
         core.info(`Findings count: ${findings.length}`);
+        core.info(`Findings by severity: critical=${severitySummary.critical}, high=${severitySummary.high}, medium=${severitySummary.medium}, low=${severitySummary.low}, info=${severitySummary.info}, unknown=${severitySummary.unknown}`);
+        logTopFindings(findings, 10);
         if (criticalFindings.length > 0) {
             core.setFailed(`Critical vulnerabilities found: ${criticalFindings.length}`);
             return;
