@@ -3,8 +3,12 @@ description: "Run SecureOps security scan"
 
 inputs:
   url:
-    description: "Target URL to scan"
-    required: true
+    description: "Target URL to scan (single mode)"
+    required: false
+
+  urls:
+    description: "Multiple target URLs (JSON array, CSV, or newline-separated). Same domain required by backend multi-scan."
+    required: false
 
   api_key:
     description: "SecureOps API key"

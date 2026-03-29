@@ -36788,6 +36788,37 @@ function parseNumberInput(name, fallback) {
     }
     return n;
 }
+function parseUrlsInput(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed)
+        return [];
+    // 1) JSON array: ["https://a", "https://b"]
+    if (trimmed.startsWith("[")) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+                return parsed
+                    .map((v) => String(v || "").trim())
+                    .filter(Boolean);
+            }
+        }
+        catch {
+            // fallback parsers below
+        }
+    }
+    // 2) Newline-separated or CSV
+    return trimmed
+        .split(/[,\n]/)
+        .map((u) => u.trim())
+        .filter(Boolean);
+}
+function collectAllFindings(result) {
+    const rootFindings = Array.isArray(result.findings) ? result.findings : [];
+    const pageFindings = Array.isArray(result.page_results)
+        ? result.page_results.flatMap((p) => (Array.isArray(p.findings) ? p.findings : []))
+        : [];
+    return [...rootFindings, ...pageFindings];
+}
 function getErrorMessage(err) {
     if (axios_1.default.isAxiosError(err)) {
         const aerr = err;
@@ -36858,7 +36889,9 @@ function logTopFindings(findings, maxItems = 10) {
 }
 async function run() {
     try {
-        const url = core.getInput("url", { required: true });
+        const urlInput = core.getInput("url");
+        const urlsInputRaw = core.getInput("urls");
+        const urlsInput = parseUrlsInput(urlsInputRaw);
         const apiKey = core.getInput("api_key", { required: true });
         const threshold = parseNumberInput("fail_on_score_below", 0);
         const baseUrl = normalizeBaseUrl(API_URL);
@@ -36866,16 +36899,34 @@ async function run() {
         const maxWaitSeconds = parseNumberInput("max_wait_seconds", 180);
         const pollIntervalMs = Math.max(1, Math.floor(pollIntervalSeconds * 1000));
         const maxWaitMs = Math.max(1, Math.floor(maxWaitSeconds * 1000));
-        core.info(`Starting SecureOps scan for: ${url}`);
+        const finalUrls = urlsInput.length > 0
+            ? urlsInput
+            : (urlInput ? [urlInput.trim()] : []);
+        if (finalUrls.length === 0) {
+            throw new Error('Invalid input: provide "url" or "urls"');
+        }
+        const isMulti = finalUrls.length > 1;
+        const modeLabel = isMulti ? "multi" : "single";
+        core.info(`Starting SecureOps scan (${modeLabel}) for: ${finalUrls.join(", ")}`);
         const headers = {
             "X-API-Key": apiKey,
             "Content-Type": "application/json",
         };
-        const createResponse = await axios_1.default.post(`${baseUrl}/scan/api/scan/async`, {
-            url,
-            scan_type: "frontend",
-            input: { lang: RESULTS_LANG },
-        }, {
+        const createEndpoint = isMulti
+            ? `${baseUrl}/scan/api/scan/multi-async`
+            : `${baseUrl}/scan/api/scan/async`;
+        const createPayload = isMulti
+            ? {
+                urls: finalUrls,
+                scan_type: "frontend",
+                input: { lang: RESULTS_LANG },
+            }
+            : {
+                url: finalUrls[0],
+                scan_type: "frontend",
+                input: { lang: RESULTS_LANG },
+            };
+        const createResponse = await axios_1.default.post(createEndpoint, createPayload, {
             headers,
             timeout: 30000,
         });
@@ -36914,18 +36965,21 @@ async function run() {
         const result = rawData && typeof rawData === "object" && "result" in rawData
             ? rawData.result || {}
             : rawData;
-        const score = Number(result.score);
+        const score = Number(isMulti ? result.score_global : result.score);
         if (!Number.isFinite(score)) {
             throw new Error(`Invalid API response: score missing or invalid. Payload: ${JSON.stringify(resultResponse.data)}`);
         }
-        const findings = Array.isArray(result.findings) ? result.findings : [];
+        const findings = collectAllFindings(result);
         const criticalFindings = findings.filter((f) => String(f?.severity || "").toLowerCase() === "critical");
         const severitySummary = summarizeFindingsBySeverity(findings);
         core.setOutput("score", String(score));
         core.info(`Score: ${score}`);
         core.info(`Findings count: ${findings.length}`);
+        if (isMulti) {
+            core.info(`Pages scanned: ${Array.isArray(result.page_results) ? result.page_results.length : 0}`);
+        }
         core.info(`Findings by severity: critical=${severitySummary.critical}, high=${severitySummary.high}, medium=${severitySummary.medium}, low=${severitySummary.low}, info=${severitySummary.info}, unknown=${severitySummary.unknown}`);
-        logTopFindings(findings, 10);
+        logTopFindings(findings, findings.length);
         if (criticalFindings.length > 0) {
             core.setFailed(`Critical vulnerabilities found: ${criticalFindings.length}`);
             return;

@@ -17,12 +17,26 @@ type StatusResponse = {
 
 type ScanResult = {
   score?: number;
+  score_global?: number;
   findings?: Array<{
     severity?: string;
     title?: string;
     evidence?: string;
     path?: string;
     endpoint?: string;
+    [key: string]: unknown;
+  }>;
+  page_results?: Array<{
+    url?: string;
+    score?: number;
+    findings?: Array<{
+      severity?: string;
+      title?: string;
+      evidence?: string;
+      path?: string;
+      endpoint?: string;
+      [key: string]: unknown;
+    }>;
     [key: string]: unknown;
   }>;
   [key: string]: unknown;
@@ -43,6 +57,41 @@ function parseNumberInput(name: string, fallback: number): number {
     throw new Error(`Invalid input "${name}": "${raw}" is not a number`);
   }
   return n;
+}
+
+function parseUrlsInput(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  // 1) JSON array: ["https://a", "https://b"]
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((v) => String(v || "").trim())
+          .filter(Boolean);
+      }
+    } catch {
+      // fallback parsers below
+    }
+  }
+
+  // 2) Newline-separated or CSV
+  return trimmed
+    .split(/[,\n]/)
+    .map((u) => u.trim())
+    .filter(Boolean);
+}
+
+function collectAllFindings(result: ScanResult): NonNullable<ScanResult["findings"]> {
+  const rootFindings = Array.isArray(result.findings) ? result.findings : [];
+
+  const pageFindings = Array.isArray(result.page_results)
+    ? result.page_results.flatMap((p) => (Array.isArray(p.findings) ? p.findings : []))
+    : [];
+
+  return [...rootFindings, ...pageFindings];
 }
 
 function getErrorMessage(err: unknown): string {
@@ -123,7 +172,9 @@ function logTopFindings(findings: ScanResult["findings"], maxItems = 10): void {
 
 async function run(): Promise<void> {
   try {
-    const url = core.getInput("url", { required: true });
+    const urlInput = core.getInput("url");
+    const urlsInputRaw = core.getInput("urls");
+    const urlsInput = parseUrlsInput(urlsInputRaw);
     const apiKey = core.getInput("api_key", { required: true });
 
     const threshold = parseNumberInput("fail_on_score_below", 0);
@@ -135,25 +186,43 @@ async function run(): Promise<void> {
     const pollIntervalMs = Math.max(1, Math.floor(pollIntervalSeconds * 1000));
     const maxWaitMs = Math.max(1, Math.floor(maxWaitSeconds * 1000));
 
-    core.info(`Starting SecureOps scan for: ${url}`);
+    const finalUrls = urlsInput.length > 0
+      ? urlsInput
+      : (urlInput ? [urlInput.trim()] : []);
+
+    if (finalUrls.length === 0) {
+      throw new Error('Invalid input: provide "url" or "urls"');
+    }
+
+    const isMulti = finalUrls.length > 1;
+    const modeLabel = isMulti ? "multi" : "single";
+    core.info(`Starting SecureOps scan (${modeLabel}) for: ${finalUrls.join(", ")}`);
 
     const headers = {
       "X-API-Key": apiKey,
       "Content-Type": "application/json",
     };
 
-    const createResponse = await axios.post<CreateJobResponse>(
-      `${baseUrl}/scan/api/scan/async`,
-      {
-        url,
-        scan_type: "frontend",
-        input: { lang: RESULTS_LANG },
-      },
-      {
-        headers,
-        timeout: 30000,
-      }
-    );
+    const createEndpoint = isMulti
+      ? `${baseUrl}/scan/api/scan/multi-async`
+      : `${baseUrl}/scan/api/scan/async`;
+
+    const createPayload = isMulti
+      ? {
+          urls: finalUrls,
+          scan_type: "frontend",
+          input: { lang: RESULTS_LANG },
+        }
+      : {
+          url: finalUrls[0],
+          scan_type: "frontend",
+          input: { lang: RESULTS_LANG },
+        };
+
+    const createResponse = await axios.post<CreateJobResponse>(createEndpoint, createPayload, {
+      headers,
+      timeout: 30000,
+    });
 
     const jobId = createResponse.data?.job_id;
     if (!jobId) {
@@ -211,14 +280,14 @@ async function run(): Promise<void> {
         ? (rawData as { result?: ScanResult }).result || {}
         : (rawData as ScanResult);
 
-    const score = Number(result.score);
+    const score = Number(isMulti ? result.score_global : result.score);
     if (!Number.isFinite(score)) {
       throw new Error(
         `Invalid API response: score missing or invalid. Payload: ${JSON.stringify(resultResponse.data)}`
       );
     }
 
-    const findings = Array.isArray(result.findings) ? result.findings : [];
+    const findings = collectAllFindings(result);
     const criticalFindings = findings.filter(
       (f) => String(f?.severity || "").toLowerCase() === "critical"
     );
@@ -227,10 +296,13 @@ async function run(): Promise<void> {
     core.setOutput("score", String(score));
     core.info(`Score: ${score}`);
     core.info(`Findings count: ${findings.length}`);
+    if (isMulti) {
+      core.info(`Pages scanned: ${Array.isArray(result.page_results) ? result.page_results.length : 0}`);
+    }
     core.info(
       `Findings by severity: critical=${severitySummary.critical}, high=${severitySummary.high}, medium=${severitySummary.medium}, low=${severitySummary.low}, info=${severitySummary.info}, unknown=${severitySummary.unknown}`
     );
-    logTopFindings(findings, 10);
+    logTopFindings(findings, findings.length);
 
     if (criticalFindings.length > 0) {
       core.setFailed(`Critical vulnerabilities found: ${criticalFindings.length}`);
